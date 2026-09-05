@@ -8,6 +8,7 @@
 #include "debug.h"
 #include "memory.h"
 #include "object.h"
+#include "table.h"
 #include "vm.h"
 
 /*
@@ -26,17 +27,23 @@ static void resetStack(void) {
 void initVM(void) {
   resetStack();
   vm.objects = NULL;
-  vm.globals = NULL;
-  vm.globalCount = 0;
-  vm.globalCapacity = 0;
+  vm.bytesAllocated = 0;
+  vm.nextGC = 1024 * 1024;
+  vm.grayCount = 0;
+  vm.grayCapacity = 0;
+  vm.grayStack = NULL;
+  initTable(&vm.globals);
+  initTable(&vm.strings);
 }
 
 void freeVM(void) {
-  FREE_ARRAY(Global, vm.globals, vm.globalCapacity);
-  vm.globals = NULL;
-  vm.globalCount = 0;
-  vm.globalCapacity = 0;
+  freeTable(&vm.globals);
+  freeTable(&vm.strings);
   freeObjects();
+  free(vm.grayStack);
+  vm.grayStack = NULL;
+  vm.grayCount = 0;
+  vm.grayCapacity = 0;
   resetStack(); /* leave the VM in a clean, reusable state */
 }
 
@@ -95,37 +102,6 @@ static void runtimeError(const char* format, ...) {
   }
 
   resetStack();
-}
-
-/* Linear globals (M2). M4 replaces this with a hash table; the bytecode
- * stays identical. Returns the globals index or -1 if absent. */
-static int findGlobal(ObjString* name) {
-  for (int i = 0; i < vm.globalCount; i++) {
-    ObjString* candidate = vm.globals[i].name;
-    if (candidate->length == name->length &&
-        memcmp(candidate->chars, name->chars, (size_t)name->length) == 0) {
-      return i;
-    }
-  }
-  return -1;
-}
-
-static void defineGlobal(ObjString* name, Value value) {
-  int index = findGlobal(name);
-  if (index != -1) {
-    vm.globals[index].value = value;
-    return;
-  }
-
-  if (vm.globalCapacity < vm.globalCount + 1) {
-    int oldCapacity = vm.globalCapacity;
-    vm.globalCapacity = GROW_CAPACITY(oldCapacity);
-    vm.globals =
-        GROW_ARRAY(Global, vm.globals, oldCapacity, vm.globalCapacity);
-  }
-  vm.globals[vm.globalCount].name = name;
-  vm.globals[vm.globalCount].value = value;
-  vm.globalCount++;
 }
 
 static void concatenate(void) {
@@ -292,12 +268,12 @@ static InterpretResult run(void) {
           runtimeError("Global name must be a string.");
           return INTERPRET_RUNTIME_ERROR;
         }
-        int index = findGlobal(AS_STRING(nameVal));
-        if (index == -1) {
+        Value value;
+        if (!tableGet(&vm.globals, AS_STRING(nameVal), &value)) {
           runtimeError("Undefined variable '%s'.", AS_CSTRING(nameVal));
           return INTERPRET_RUNTIME_ERROR;
         }
-        push(vm.globals[index].value);
+        push(value);
         break;
       }
       case OP_DEFINE_GLOBAL: {
@@ -312,7 +288,7 @@ static InterpretResult run(void) {
           runtimeError("Global name must be a string.");
           return INTERPRET_RUNTIME_ERROR;
         }
-        defineGlobal(AS_STRING(nameVal), peek(0));
+        tableSet(&vm.globals, AS_STRING(nameVal), peek(0));
         pop();
         break;
       }
@@ -328,12 +304,12 @@ static InterpretResult run(void) {
           runtimeError("Global name must be a string.");
           return INTERPRET_RUNTIME_ERROR;
         }
-        int index = findGlobal(AS_STRING(nameVal));
-        if (index == -1) {
+        Value unused;
+        if (!tableGet(&vm.globals, AS_STRING(nameVal), &unused)) {
           runtimeError("Undefined variable '%s'.", AS_CSTRING(nameVal));
           return INTERPRET_RUNTIME_ERROR;
         }
-        vm.globals[index].value = peek(0);
+        tableSet(&vm.globals, AS_STRING(nameVal), peek(0));
         break;
       }
       case OP_GET_UPVALUE: {

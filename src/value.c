@@ -55,18 +55,10 @@ bool valuesEqual(Value a, Value b) {
       return true; /* nil equals nil */
     case VAL_NUMBER:
       return AS_NUMBER(a) == AS_NUMBER(b);
-    case VAL_OBJ: {
-      /* Strings compare by content until interning lands (M4); other
-       * objects compare by identity. Using IS and AS macros keeps
-       * NaN-boxing drop-in safe. */
-      if (IS_STRING(a) && IS_STRING(b)) {
-        ObjString* sa = AS_STRING(a);
-        ObjString* sb = AS_STRING(b);
-        if (sa->length != sb->length) return false;
-        return memcmp(sa->chars, sb->chars, (size_t)sa->length) == 0;
-      }
+    case VAL_OBJ:
+      /* With interning (M4) identical strings share one ObjString, so
+       * identity implies content equality for all objects. */
       return AS_OBJ(a) == AS_OBJ(b);
-    }
     default:
       return false;
   }

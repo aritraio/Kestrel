@@ -1,0 +1,21 @@
+fun outer() {
+  var x = 10;
+  fun inner() {
+    print x;
+  }
+  inner();
+}
+outer();
+fun counter() {
+  var count = 0;
+  fun inc() {
+    count = count + 1;
+    print count;
+  }
+  return inc;
+}
+var c1 = counter();
+var c2 = counter();
+c1();
+c1();
+c2();

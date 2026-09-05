@@ -28,11 +28,17 @@ make test
 ### Run
 
 ```sh
+# Start the REPL (read-eval-print loop)
+./kestrel
+
+# Compile and run a source file
+./kestrel examples/hello.txt
+
 # Run hand-assembled bytecode demo (disassembles and evaluates)
 ./kestrel demo
 
 # Lex a source file and inspect its token stream
-./kestrel examples/hello.txt
+./kestrel --lex examples/hello.txt
 ```
 
 ---
@@ -51,13 +57,15 @@ make test
 ├── src/                  # C11 engine source code
 │   ├── chunk.h / .c      # Bytecode chunk buffer & constant pool
 │   ├── common.h          # Shared standard library headers & debug flags
+│   ├── compiler.h / .c   # Pratt parser, scopes, functions, closures
 │   ├── debug.h / .c      # Bytecode disassembler & operand decoder
-│   ├── main.c            # CLI entry point & driver
-│   ├── memory.h / .c     # Centralized reallocate() memory manager
-│   ├── object.h / .c     # Heap object headers (Obj, ObjString)
+│   ├── main.c            # CLI entry point (REPL, run, lex, demo)
+│   ├── memory.h / .c     # reallocate() + mark-and-sweep GC
+│   ├── object.h / .c     # ObjString/Function/Closure/Upvalue
 │   ├── scanner.h / .c    # Lexical scanner (maximal-munch, zero-copy tokens)
+│   ├── table.h / .c      # Hash table (globals + string interning)
 │   ├── value.h / .c      # Tagged-union Value and dynamic ValueArray
-│   └── vm.h / .c         # Stack VM execution engine & runtime checks
+│   └── vm.h / .c         # Stack VM, call frames, upvalues & runtime checks
 ├── tests/                # Automated regression test suite
 │   ├── fixtures/
 │   └── run_tests.sh
@@ -97,11 +105,12 @@ When enabled, the VM prints the entire operand stack before every instruction an
 0004    | OP_ADD
 0005    | OP_NEGATE
 0006    | OP_PRINT
-0007    | OP_RETURN
-          [ 1.2 ]
-          [ 1.2 ][ 3.4 ]
-          [ 4.6 ]
-          [ -4.6 ]
+0007    | OP_NIL
+0008    | OP_RETURN
+           [ 1.2 ]
+           [ 1.2 ][ 3.4 ]
+           [ 4.6 ]
+           [ -4.6 ]
 -4.6
 ```
 
@@ -112,9 +121,9 @@ When enabled, the VM prints the entire operand stack before every instruction an
 | # | Milestone | Scope | Status | Deliverables |
 | :-: | :--- | :--- | :-: | :--- |
 | **1** | **Foundations** | ISA, Value/Chunk/VM structures, scanner, disassembler, minimal VM over arithmetic | **Completed** | Disassembler, arithmetic execution (`./kestrel demo`), file lexing, regression tests. |
-| **2** | **Compiler** | Pratt parser (precedence climbing), expressions, statements (`var`, `if/else`, `while`, `print`), jump backpatching | *Next* | `./kestrel <file>` compiles source directly into bytecode and executes it. |
-| **3** | **Functions & Closures** | `fun` declarations, `OP_CALL`, stack call frames, recursion, upvalues, `OP_CLOSURE`, stack traces | *Planned* | Recursive `fib(n)` and closure-based state encapsulation. |
-| **4** | **Garbage Collector** | Heap object allocations (`ObjString`, `ObjFunction`), mark-and-sweep GC, stress-test mode | *Planned* | Stability under `DEBUG_STRESS_GC` without memory leaks. |
+| **2** | **Compiler** | Pratt parser (precedence climbing), expressions, statements (`var`, `if/else`, `while`, `print`), jump backpatching, strings | **Completed** | `./kestrel <file>` compiles source directly into bytecode and executes it. |
+| **3** | **Functions & Closures** | `fun` declarations, `OP_CALL`, stack call frames, recursion, upvalues, `OP_CLOSURE`, stack traces | **Completed** | Recursive `fib(n)` and closure-based state encapsulation. |
+| **4** | **Garbage Collector** | Hash table globals/interning, mark-and-sweep GC via `reallocate()`, stress-test mode, REPL | **Completed** | Stability under `DEBUG_STRESS_GC` without leaks; `./kestrel` REPL; `bench_fib` benchmark. |
 
 ---
 

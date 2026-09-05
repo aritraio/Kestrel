@@ -8,6 +8,7 @@
 #include "memory.h"
 #include "object.h"
 #include "scanner.h"
+#include "vm.h"
 
 /*
  * Single-pass Pratt parser + function compiler (Milestones 2-3).
@@ -279,7 +280,12 @@ static void string(bool canAssign) {
     }
   }
   heap[out] = '\0';
-  emitConstant(OBJ_VAL(takeString(heap, out)));
+  /* Root across makeConstant's potential collection: the fresh string is
+   * otherwise only in the weak intern table until it lands in the chunk. */
+  ObjString* string = takeString(heap, out);
+  push(OBJ_VAL(string));
+  emitConstant(OBJ_VAL(string));
+  pop();
 }
 
 static void literal(bool canAssign) {
@@ -561,7 +567,11 @@ static void declareVariable(void) {
 }
 
 static uint8_t identifierConstant(Token* name) {
-  return makeConstant(OBJ_VAL(copyString(name->start, name->length)));
+  ObjString* string = copyString(name->start, name->length);
+  push(OBJ_VAL(string));
+  uint8_t constant = makeConstant(OBJ_VAL(string));
+  pop();
+  return constant;
 }
 
 static uint8_t parseVariable(const char* errorMessage) {
@@ -754,7 +764,12 @@ static void function(FunctionType type) {
   function = current->function;
   current = current->enclosing;
 
+  /* Root across makeConstant's potential collection: the finished function
+   * is otherwise unreachable (not yet in the enclosing chunk, no longer in
+   * the compiler chain) until OP_CLOSURE lands. */
+  push(OBJ_VAL(function));
   emitBytes(OP_CLOSURE, makeConstant(OBJ_VAL(function)));
+  pop();
   for (int i = 0; i < function->upvalueCount; i++) {
     emitByte(compiler.upvalues[i].isLocal ? 1 : 0);
     emitByte(compiler.upvalues[i].index);
@@ -834,6 +849,15 @@ ObjFunction* compile(const char* source) {
   compiler.function = newFunction();
   current = &compiler;
 
+  /* Reserve slot 0 for the VM's own use (the script closure). Without this,
+   * the first block local would occupy slot 0 and collide with the closure
+   * at frame->slots[0], making `print a` read the closure (`<script>`). */
+  Local* local = &current->locals[current->localCount++];
+  local->depth = 0;
+  local->isCaptured = false;
+  local->name.start = "";
+  local->name.length = 0;
+
   parser.hadError = false;
   parser.panicMode = false;
 
@@ -849,4 +873,12 @@ ObjFunction* compile(const char* source) {
   current = current->enclosing;
 
   return parser.hadError ? NULL : function;
+}
+
+void markCompilerRoots(void) {
+  Compiler* compiler = current;
+  while (compiler != NULL) {
+    markObject((Obj*)compiler->function);
+    compiler = compiler->enclosing;
+  }
 }

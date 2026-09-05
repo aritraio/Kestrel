@@ -1,0 +1,8 @@
+var s = "";
+var i = 0;
+while (i < 200) {
+  s = s + "x";
+  i = i + 1;
+}
+print s == s;
+print i;

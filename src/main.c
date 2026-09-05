@@ -8,8 +8,9 @@
 #include "vm.h"
 
 /*
- * Milestone 2 (Phase A) driver:
+ * Milestone 4 driver:
  *
+ *   ./kestrel              Start the REPL (read-eval-print loop).
  *   ./kestrel demo         Build a chunk by hand, disassemble it, run it.
  *   ./kestrel <file>       Compile <file> to bytecode and execute it.
  *                          Exit 65 (EX_DATAERR) on compile error,
@@ -21,9 +22,10 @@
 static void usage(void) {
   fprintf(stderr,
           "Usage:\n"
-          "  kestrel demo         build a hand-written chunk, disassemble and run it\n"
-          "  kestrel <file>       compile <file> to bytecode and run it\n"
-          "  kestrel --lex <file> lex <file> and print its tokens\n");
+          "  kestrel                start the REPL\n"
+          "  kestrel demo           build a hand-written chunk, disassemble and run it\n"
+          "  kestrel <file>         compile <file> to bytecode and run it\n"
+          "  kestrel --lex <file>   lex <file> and print its tokens\n");
 }
 
 /* Hand-assembles: -(1.2 + 3.4), i.e. 1.2 3.4 ADD NEGATE. */
@@ -129,7 +131,32 @@ static int runFile(const char* path) {
   return 0;
 }
 
+static void repl(void) {
+  char line[1024];
+
+  initVM();
+
+  for (;;) {
+    printf("> ");
+
+    if (!fgets(line, sizeof(line), stdin)) {
+      printf("\n");
+      break;
+    }
+
+    /* Errors are already reported; the REPL stays alive past them. */
+    interpret(line);
+  }
+
+  freeVM();
+}
+
 int main(int argc, char* argv[]) {
+  if (argc == 1) {
+    repl();
+    return 0;
+  }
+
   if (argc == 2 && strcmp(argv[1], "demo") == 0) {
     demoChunk();
     return 0;

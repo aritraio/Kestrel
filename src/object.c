@@ -4,10 +4,11 @@
 #include "chunk.h"
 #include "memory.h"
 #include "object.h"
+#include "table.h"
 #include "value.h"
 #include "vm.h"
 
-/* FNV-1a 32-bit hash; stored on every string now, used for interning in M4. */
+/* FNV-1a 32-bit hash; stored on every string, used for interning. */
 uint32_t hashString(const char* key, int length) {
   uint32_t hash = 2166136261u;
   for (int i = 0; i < length; i++) {
@@ -67,22 +68,36 @@ static ObjString* allocateString(char* chars, int length, uint32_t hash) {
   string->hash = hash;
   memcpy(string->chars, chars, (size_t)length);
   string->chars[length] = '\0';
+  /* Intern: keep the string reachable across tableSet's own allocation
+   * (which may trigger a collection) by rooting it on the VM stack. */
+  push(OBJ_VAL(string));
+  tableSet(&vm.strings, string, NIL_VAL);
+  pop();
   return string;
 }
 
 ObjString* copyString(const char* chars, int length) {
   uint32_t hash = hashString(chars, length);
+  ObjString* interned =
+      tableFindString(&vm.strings, chars, length, hash);
+  if (interned != NULL) return interned;
   return allocateString((char*)chars, length, hash);
 }
 
 ObjString* takeString(char* chars, int length) {
   uint32_t hash = hashString(chars, length);
+  ObjString* interned =
+      tableFindString(&vm.strings, chars, length, hash);
+  if (interned != NULL) {
+    FREE_ARRAY(char, chars, length + 1);
+    return interned;
+  }
   ObjString* string = allocateString(chars, length, hash);
   FREE_ARRAY(char, chars, length + 1);
   return string;
 }
 
-static void freeObject(Obj* object) {
+void freeObject(Obj* object) {
   switch (object->type) {
     case OBJ_CLOSURE: {
       ObjClosure* closure = (ObjClosure*)object;

@@ -2,12 +2,12 @@
 #define MEMORY_H
 
 #include "common.h"
+#include "value.h"
 
 /*
- * All dynamic allocation goes through reallocate(). Today it is a thin
- * wrapper over realloc(); in Milestone 4 (the GC) it becomes the single
- * allocation entry point where the collector can run before handing out
- * memory. Keep every allocation on this road.
+ * All dynamic allocation goes through reallocate(). It tracks bytesAllocated
+ * and runs the mark-and-sweep collector (Milestone 4) before handing out
+ * memory when the threshold is reached. Keep every allocation on this road.
  */
 
 #define GROW_CAPACITY(capacity) ((capacity) < 8 ? 8 : (capacity) * 2)
@@ -24,5 +24,8 @@
 #define FREE(type, pointer) reallocate(pointer, sizeof(type), 0)
 
 void* reallocate(void* pointer, size_t oldSize, size_t newSize);
+void markObject(Obj* object);
+void markValue(Value value);
+void collectGarbage(void);
 
 #endif

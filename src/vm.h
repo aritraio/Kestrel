@@ -3,33 +3,26 @@
 
 #include "chunk.h"
 #include "object.h"
+#include "table.h"
 #include "value.h"
 
 #define FRAMES_MAX 64
 #define STACK_MAX (FRAMES_MAX * UINT8_COUNT)
 
 /*
- * The VM (Milestone 3: functions + closures).
+ * The VM (Milestone 4: functions + closures + GC).
  *
  * Call frames give each function its own `ip` and window (`slots`) into the
- * shared value stack. Locals are frame-relative (`frame->slots[slot]`).
- * `openUpvalues` threads heap upvalues that still point into the stack;
- * OP_CLOSE_UPVALUE hoists them to the heap when their local goes out of
- * scope.
- *
- * Globals (M2) stay a linear name/value list; M4 swaps in a hash table
- * without changing bytecode. `objects` is the GC root list (M4).
+ * shared value stack. `openUpvalues` threads heap upvalues that still point
+ * into the stack. `globals` and `strings` (intern pool) are hash tables.
+ * `objects` is the intrusive list of all heap objects; `grayStack` is the
+ * GC worklist; `bytesAllocated`/`nextGC` drive collection in reallocate().
  */
 typedef struct {
   ObjClosure* closure;
   uint8_t* ip;
   Value* slots;
 } CallFrame;
-
-typedef struct {
-  ObjString* name;
-  Value value;
-} Global;
 
 typedef struct {
   CallFrame frames[FRAMES_MAX];
@@ -40,11 +33,16 @@ typedef struct {
 
   Obj* objects; /* intrusive list of all heap objects (see object.c) */
 
-  Global* globals; /* linear globals table (hash table in M4) */
-  int globalCount;
-  int globalCapacity;
+  Table globals; /* global variables by interned name */
+  Table strings; /* interned strings (weak: cleaned via tableRemoveWhite) */
 
   ObjUpvalue* openUpvalues;
+
+  size_t bytesAllocated;
+  size_t nextGC;
+  Obj** grayStack;
+  int grayCount;
+  int grayCapacity;
 } VM;
 
 extern VM vm;

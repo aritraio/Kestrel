@@ -1,0 +1,21 @@
+var f;
+{
+  var x = 1;
+  fun g() {
+    print x;
+  }
+  f = g;
+}
+f();
+fun outer() {
+  var x = 1;
+  fun set(v) {
+    x = v;
+  }
+  fun get() {
+    print x;
+  }
+  set(2);
+  get();
+}
+outer();

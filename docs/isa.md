@@ -112,7 +112,7 @@ Multi-byte offsets are encoded in **big-endian** order (`code[0] << 8 | code[1]`
 | Opcode | Hex / Dec | Operands | Stack Effect | Description |
 | :--- | :---: | :--- | :---: | :--- |
 | `OP_JUMP` | `0x16` (22) | `i16 offset` | `--` | Unconditional forward jump. Advances `ip` forward by `offset` bytes (`ip += offset`). |
-| `OP_JUMP_IF_FALSE` | `0x17` (23) | `i16 offset` | `cond ->` | Evaluates condition on top of stack. If `IS_FALSY(cond)`, advances `ip` forward by `offset` bytes. |
+| `OP_JUMP_IF_FALSE` | `0x17` (23) | `i16 offset` | `cond -> cond` (peek) | Peeks condition on top of stack (does **not** pop). If `IS_FALSY(cond)`, advances `ip` forward by `offset` bytes. The compiler emits an explicit `OP_POP` on each branch so `and`/`or`/`if`/`while` balance the stack. |
 | `OP_LOOP` | `0x18` (24) | `u16 magnitude` | `--` | Backward jump for loops. Decrements `ip` backward by `magnitude` bytes (`ip -= magnitude`). |
 
 #### Jump Computation Details
@@ -152,7 +152,14 @@ The disassembler ([`src/debug.c`](file:///Users/aritra/Code/Languages/C/Project-
 0004    | OP_ADD
 0005    | OP_NEGATE
 0006    | OP_PRINT
-0007    | OP_RETURN
+0007    | OP_NIL
+0008    | OP_RETURN
+```
+
+`OP_CLOSURE` disassembles with its upvalue descriptors on following lines:
+```text
+0000    2 OP_CLOSURE          1 <fn inner>
+0002      |                     local 1
 ```
 
 ### Columns

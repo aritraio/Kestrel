@@ -73,6 +73,7 @@ ObjUpvalue* newUpvalue(Value* slot);
 ObjString* copyString(const char* chars, int length);
 ObjString* takeString(char* chars, int length);
 uint32_t hashString(const char* key, int length);
+void freeObject(Obj* object);
 void freeObjects(void);
 void printObject(Value value);
 

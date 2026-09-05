@@ -12,16 +12,17 @@ Kestrel is organized into distinct, modular compiler and runtime phases. The arc
 flowchart TD
     subgraph Frontend [Compiler Pipeline]
         Source["Source Text (.txt / .ks)"] --> Scanner["Scanner (scanner.c)"]
-        Scanner -->|"Token Stream (zero-copy)"| Compiler["Pratt Compiler (Milestone 2)"]
-        Compiler -->|"Emits Bytecode & Constants"| Chunk["Chunk (chunk.c)"]
+        Scanner -->|"Token Stream (zero-copy)"| Compiler["Pratt Compiler (compiler.c)"]
+        Compiler -->|"ObjFunction + Bytecode & Constants"| Chunk["Chunk (chunk.c)"]
     end
 
     subgraph Backend [Runtime Engine]
         Chunk -->|"Disassembles"| Disassembler["Disassembler (debug.c)"]
         Chunk -->|"Executes"| VM["Virtual Machine (vm.c)"]
-        VM <-->|"Operands & Locals"| Stack["Value Stack (Value stack[256])"]
-        VM <-->|"Allocations"| Memory["Memory Manager (memory.c)"]
-        Memory <-->|"Heap Objects"| Objects["Obj / ObjString (object.c)"]
+        VM <-->|"Frames & Locals"| Stack["Value Stack + CallFrames (64 frames)"]
+        VM <-->|"Globals / Interning"| Table["Hash Table (table.c)"]
+        VM <-->|"Allocations"| Memory["Memory Manager + GC (memory.c)"]
+        Memory <-->|"Heap Objects"| Objects["ObjString/Function/Closure/Upvalue (object.c)"]
     end
 ```
 
@@ -107,54 +108,99 @@ All heap-allocated entities share an `Obj` header:
 
 ```c
 struct sObj {
-  ObjType type;
-  bool isMarked;       // Mark bit for Milestone 4 Garbage Collector
-  struct sObj* next;   // Intrusive singly-linked list of all allocated objects
+  ObjType type;          // OBJ_STRING / FUNCTION / CLOSURE / UPVALUE
+  bool isMarked;         // Mark bit for the mark-and-sweep collector
+  struct sObj* next;     // Intrusive singly-linked list of all allocated objects
 };
 ```
 
-Strings are allocated inline using C99 flexible array members:
+Strings are allocated inline using C99 flexible array members, functions own
+their chunk, closures point at a function plus captured upvalues, and open
+upvalues point into the VM stack until closed:
+
 ```c
 struct sObjString {
   Obj obj;
   int length;
-  char chars[];        // Flexible array member: character data stored inline
+  uint32_t hash;         // FNV-1a, used for interning
+  char chars[];          // Flexible array member: character data stored inline
 };
+typedef struct {
+  Obj obj;
+  int arity;
+  int upvalueCount;
+  Chunk chunk;
+  ObjString* name;       // NULL for top-level script
+} ObjFunction;
+typedef struct sObjUpvalue {
+  Obj obj;
+  Value* location;       // stack slot (open) or &closed (closed)
+  Value closed;
+  struct sObjUpvalue* next;
+} ObjUpvalue;
+typedef struct {
+  Obj obj;
+  ObjFunction* function;
+  ObjUpvalue** upvalues;
+  int upvalueCount;
+} ObjClosure;
 ```
+
+String interning guarantees identical literals share one `ObjString`, so
+`valuesEqual` for objects is identity. During compilation fresh strings and
+functions are rooted on the VM stack across `makeConstant` (see `compiler.c`)
+so a collection triggered by constant/chunk growth cannot free them before
+they land in the chunk.
 
 ---
 
 ## 5. Virtual Machine (`vm.h`, `vm.c`)
 
-The Kestrel VM is a stack-based abstract machine with a single global state instance (`VM vm`).
+The Kestrel VM is a stack-based abstract machine with call frames and a
+single global state instance (`VM vm`).
 
 ```c
 typedef struct {
-  Chunk* chunk;
-  uint8_t* ip;                     // Instruction pointer into chunk->code
-  Value stack[STACK_MAX];          // Operand and local variable stack (256 slots)
-  Value* stackTop;                 // Points to the next free slot on the stack
+  ObjClosure* closure;
+  uint8_t* ip;                       // Instruction pointer into function chunk
+  Value* slots;                      // Window into vm.stack for locals/temps
+} CallFrame;
+typedef struct {
+  CallFrame frames[FRAMES_MAX];      // 64 frames
+  int frameCount;
+  Value stack[STACK_MAX];            // 64*256 slots: operands + locals
+  Value* stackTop;
+  Obj* objects;                      // All heap objects (GC list)
+  Table globals;                     // Globals by interned name
+  Table strings;                     // Intern pool (weak)
+  ObjUpvalue* openUpvalues;          // Sorted by stack address
+  size_t bytesAllocated, nextGC;     // GC threshold (starts 1 MiB, doubles)
+  Obj** grayStack; int grayCount, grayCapacity;
 } VM;
 ```
 
 ### 5.1 Stack Discipline & Safety
 1. **Assertions**: `push()` and `pop()` assert stack bounds in debug builds (`vm.stackTop < vm.stack + STACK_MAX` and `vm.stackTop > vm.stack`).
 2. **Peeking**: `peek(int distance)` accesses values relative to the stack top without popping them (`vm.stackTop[-1 - distance]`).
-3. **Dynamic Type Validation**: Arithmetic operations check operand types with `IS_NUMBER()` before executing operations. If a type mismatch occurs, `runtimeError()` outputs an informative error message and line number, resets the stack, and exits the run loop with `INTERPRET_RUNTIME_ERROR`.
+3. **Frames**: `call()` checks arity (`Expected %d arguments but got %d.`) and `FRAMES_MAX` (`Stack overflow.`); `callValue()` rejects non-closures (`Can only call functions and classes.`). Locals are `frame->slots[slot]`; slot 0 is reserved for the closure itself.
+4. **Upvalues**: `captureUpvalue()` dedups sorted open upvalues; `OP_CLOSE_UPVALUE` hoists `*location` to `closed` when the local leaves scope, so returned closures keep working.
+5. **Dynamic Type Validation**: Arithmetic checks `IS_NUMBER()` / string concat checks `IS_STRING()` before operating, else `Operands must be two numbers or two strings.`
 
 ### 5.2 Error Reporting & Stack Unwinding
 When a runtime error occurs:
 ```c
 static void runtimeError(const char* format, ...) {
   // 1. Prints formatted diagnostic message to stderr
-  // 2. Looks up the offending source line via chunk->lines
-  // 3. Resets vm.stackTop to vm.stack to prevent stack leak/corruption
+  // 2. Walks frames: "[line N] in fn()" per frame ("script" for top level)
+  // 3. Resets stackTop/frameCount/openUpvalues to prevent corruption
 }
 ```
+`OP_JUMP_IF_FALSE` peeks (does not pop); the compiler emits an explicit
+`OP_POP` on each branch so `and`/`or` can leave short-circuited values.
 
 ---
 
-## 6. Memory Management (`memory.h`, `memory.c`)
+## 6. Memory Management & Garbage Collector (`memory.h`, `memory.c`, `table.h`)
 
 All dynamic allocations, reallocations, and deallocations pass through a single entry point:
 
@@ -164,12 +210,27 @@ void* reallocate(void* pointer, size_t oldSize, size_t newSize);
 
 | Operation | `pointer` | `oldSize` | `newSize` | Behavior |
 | :--- | :--- | :--- | :--- | :--- |
-| **Allocate** | `NULL` | `0` | $> 0$ | Calls `realloc(NULL, newSize)`. |
-| **Grow** | Existing buffer | Current bytes | New bytes | Calls `realloc(pointer, newSize)`. |
-| **Free** | Existing buffer | Current bytes | `0` | Calls `free(pointer)`, returns `NULL`. |
+| **Allocate** | `NULL` | `0` | $> 0$ | Runs GC if over threshold, then `realloc(NULL, newSize)`. |
+| **Grow** | Existing buffer | Current bytes | New bytes | Runs GC if growing over threshold, then `realloc`. |
+| **Free** | Existing buffer | Current bytes | `0` | Calls `free(pointer)`, returns `NULL` (never triggers GC). |
 
-> [!NOTE]
-> In Milestone 4, `reallocate()` becomes the primary hook for garbage collection. When memory allocation thresholds are reached, the mark-and-sweep collector will trigger directly inside this function.
+The collector is mark-and-sweep with a tri-color worklist (`grayStack`, raw
+`realloc` to avoid re-entrancy):
+1. **Mark roots**: VM stack, frames (closures), `openUpvalues`, `globals`
+   (via `markTable`), compiler chain (`markCompilerRoots` for in-progress
+   functions).
+2. **Trace**: pop gray objects, `blackenObject` (closure→function+upvalues,
+   function→name+constants, upvalue→closed).
+3. **Sweep**: free unmarked objects via `freeObject`, clear marks; then
+   `tableRemoveWhite(&vm.strings)` drops unreachable interned strings.
+4. **Threshold**: `nextGC = bytesAllocated * 2` (starts 1 MiB).
+`DEBUG_STRESS_GC` collects on every growing allocation;
+`DEBUG_LOG_GC` logs begin/end bytes. The suite passes under both normal and
+stress modes plus ASan/UBSan.
+
+Hash tables (`table.c`) are open-addressing with linear probing, tombstones
+(`key NULL` + `true`), `TABLE_MAX_LOAD 0.75`, FNV-1a hashing, big-endian-safe
+`memcmp` lookups for interning (`tableFindString`) and globals.
 
 ---
 
@@ -184,3 +245,12 @@ Kestrel follows the standard BSD `<sysexits.h>` exit conventions:
 | `65` | `EX_DATAERR` | Lexical error, syntax error, or compile failure in source file. |
 | `70` | `EX_SOFTWARE` | Internal engine error (e.g. constant pool overflow). |
 | `74` | `EX_IOERR` | File could not be opened, read, or accessed. |
+
+---
+
+## 8. CLI Modes (`main.c`)
+
+* `./kestrel` — REPL: prints `> `, `fgets` each line (1024 B), `interpret()`s it, stays alive past compile/runtime errors.
+* `./kestrel <file>` — compiles and runs the file (`65` on compile error, `70` on runtime error).
+* `./kestrel demo` — hand-assembles `-(1.2+3.4)`, disassembles, runs (ends with `OP_NIL` for frame `OP_RETURN`).
+* `./kestrel --lex <file>` — token dump (`65` on lex error); preserves Milestone 1 behavior behind a flag.

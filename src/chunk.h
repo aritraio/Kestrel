@@ -37,7 +37,9 @@
  * OP_NEGATE            --                    n -> -n
  * OP_PRINT             --                    v ->               pop and print
  * OP_JUMP              i16 offset            --                 unconditional jump
- * OP_JUMP_IF_FALSE     i16 offset            cond ->            branch if falsy
+ * OP_JUMP_IF_FALSE     i16 offset            cond -> cond       peek; branch if
+ *                                                        falsy (compiler emits
+ *                                                        OP_POP per branch)
  * OP_LOOP              u16 offset magnitude   --                 jump backward by
  *                                                              (ip - offset)
  * OP_CALL              u8 arg count          fn args... -> result
