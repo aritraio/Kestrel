@@ -1,0 +1,7 @@
+print -5;
+print -1 * -2;
+print !false;
+print !true;
+print !!true;
+print !(1 == 1);
+print - -5;

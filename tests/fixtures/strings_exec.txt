@@ -1,0 +1,9 @@
+print "hello";
+print "hello" + " world";
+var s = "foo";
+print s + "bar";
+print s + " " + s;
+print "" + "";
+print "a" + "b" == "ab";
+print "hi" == "hi";
+print "hi" != "bye";

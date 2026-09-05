@@ -8,23 +8,22 @@
 #include "vm.h"
 
 /*
- * Milestone 1 driver. There is no compiler yet, so the two ways to exercise
- * the pipeline are:
+ * Milestone 2 (Phase A) driver:
  *
- *   ./kestrel demo        Build a chunk by hand, disassemble it, run it.
- *   ./kestrel <file>      Lex <file> and dump every token with its line;
- *                         exits 65 (EX_DATAERR) if the source has errors.
- *
- * Once the Pratt parser lands (Milestone 2), `./kestrel <file>` will instead
- * compile source to a chunk and disassemble it -- the token dump stays
- * available behind a flag.
+ *   ./kestrel demo         Build a chunk by hand, disassemble it, run it.
+ *   ./kestrel <file>       Compile <file> to bytecode and execute it.
+ *                          Exit 65 (EX_DATAERR) on compile error,
+ *                          70 (EX_SOFTWARE) on runtime error.
+ *   ./kestrel --lex <file> Lex <file> and dump every token with its line;
+ *                          exits 65 (EX_DATAERR) if the source has errors.
  */
 
 static void usage(void) {
   fprintf(stderr,
           "Usage:\n"
-          "  kestrel demo       build a hand-written chunk, disassemble and run it\n"
-          "  kestrel <file>     lex <file> and print its tokens\n");
+          "  kestrel demo         build a hand-written chunk, disassemble and run it\n"
+          "  kestrel <file>       compile <file> to bytecode and run it\n"
+          "  kestrel --lex <file> lex <file> and print its tokens\n");
 }
 
 /* Hand-assembles: -(1.2 + 3.4), i.e. 1.2 3.4 ADD NEGATE. */
@@ -34,24 +33,27 @@ static void demoChunk(void) {
 
   int constant = addConstant(&chunk, NUMBER_VAL(1.2));
   writeChunk(&chunk, OP_CONSTANT, 123);
-  writeChunk(&chunk, constant, 123);
+  writeChunk(&chunk, (uint8_t)constant, 123);
 
   constant = addConstant(&chunk, NUMBER_VAL(3.4));
   writeChunk(&chunk, OP_CONSTANT, 123);
-  writeChunk(&chunk, constant, 123);
+  writeChunk(&chunk, (uint8_t)constant, 123);
 
   writeChunk(&chunk, OP_ADD, 123);
   writeChunk(&chunk, OP_NEGATE, 123);
   writeChunk(&chunk, OP_PRINT, 123);
+  /* Script frames return a value: leave nil for OP_RETURN to consume,
+   * mirroring what emitReturn() generates for compiled scripts. */
+  writeChunk(&chunk, OP_NIL, 123);
   writeChunk(&chunk, OP_RETURN, 123);
 
   disassembleChunk(&chunk, "demo chunk");
 
   initVM();
-  interpret(&chunk);
+  /* interpretChunk takes ownership of the chunk buffers; do not freeChunk
+   * afterwards (the function object owns them until freeVM). */
+  interpretChunk(&chunk);
   freeVM();
-
-  freeChunk(&chunk);
 }
 
 static char* readFile(const char* path) {
@@ -113,17 +115,35 @@ static bool lexFile(const char* path) {
   return hadError;
 }
 
-int main(int argc, char* argv[]) {
-  if (argc != 2) {
-    usage();
-    return 64;
-  }
+static int runFile(const char* path) {
+  char* source = readFile(path);
 
-  if (strcmp(argv[1], "demo") == 0) {
+  initVM();
+  InterpretResult result = interpret(source);
+  freeVM();
+
+  free(source);
+
+  if (result == INTERPRET_COMPILE_ERROR) return 65;
+  if (result == INTERPRET_RUNTIME_ERROR) return 70;
+  return 0;
+}
+
+int main(int argc, char* argv[]) {
+  if (argc == 2 && strcmp(argv[1], "demo") == 0) {
     demoChunk();
     return 0;
   }
 
-  /* 65 = EX_DATAERR: malformed input data. */
-  return lexFile(argv[1]) ? 65 : 0;
+  if (argc == 3 && strcmp(argv[1], "--lex") == 0) {
+    /* 65 = EX_DATAERR: malformed input data. */
+    return lexFile(argv[2]) ? 65 : 0;
+  }
+
+  if (argc == 2) {
+    return runFile(argv[1]);
+  }
+
+  usage();
+  return 64;
 }

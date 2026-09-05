@@ -1,6 +1,7 @@
 #include <stdio.h>
 
 #include "debug.h"
+#include "object.h"
 #include "value.h"
 
 /*
@@ -75,12 +76,14 @@ static int jumpInstruction(const char* name, int sign, Chunk* chunk, int offset)
 }
 
 static int closureInstruction(Chunk* chunk, int offset) {
+  int start = offset;
   if (offset + 2 > chunk->count) {
     printf("%-16s <truncated instruction>\n", "OP_CLOSURE");
     return chunk->count;
   }
 
-  uint8_t constant = chunk->code[offset + 1];
+  offset++; /* opcode */
+  uint8_t constant = chunk->code[offset++];
   printf("%-16s %4d ", "OP_CLOSURE", constant);
   if (constant < chunk->constants.count) {
     printValue(chunk->constants.values[constant]);
@@ -89,15 +92,25 @@ static int closureInstruction(Chunk* chunk, int offset) {
   }
   printf("\n");
 
-  /*
-   * Safety note: OP_CLOSURE is followed by `upvalueCount` descriptor pairs
-   * (u8 isLocal, u8 index), but that count lives inside the ObjFunction
-   * constant, which does not exist until Milestone 3. Without it we cannot
-   * know how many pairs to consume, so we stop after the constant index.
-   * OP_CLOSURE is never emitted yet, so this is safe; when functions land,
-   * decode the pairs here (and bounds-check each of them) like clox does.
-   */
-  return offset + 2;
+  /* Each upvalue is a 2-byte descriptor (isLocal, index). The count lives
+   * inside the ObjFunction constant; without it we cannot know how many
+   * pairs follow, so a non-function constant ends the decode here. */
+  if (constant >= chunk->constants.count) return offset;
+  Value functionVal = chunk->constants.values[constant];
+  if (!IS_FUNCTION(functionVal)) return offset;
+  int upvalueCount = AS_FUNCTION(functionVal)->upvalueCount;
+
+  for (int j = 0; j < upvalueCount; j++) {
+    if (offset + 2 > chunk->count) {
+      printf("%04d      |                     <truncated upvalue>\n", offset);
+      return chunk->count;
+    }
+    uint8_t isLocal = chunk->code[offset++];
+    uint8_t index = chunk->code[offset++];
+    printf("%04d      |                     %s %d\n", start,
+           isLocal != 0 ? "local" : "upvalue", index);
+  }
+  return offset;
 }
 
 int disassembleInstruction(Chunk* chunk, int offset) {

@@ -5,29 +5,49 @@
 #include "object.h"
 #include "value.h"
 
-#define STACK_MAX 256
+#define FRAMES_MAX 64
+#define STACK_MAX (FRAMES_MAX * UINT8_COUNT)
 
 /*
- * The VM. Milestone 1 runs a minimal subset of the ISA; the struct already
- * carries the fields later milestones add around them:
+ * The VM (Milestone 3: functions + closures).
  *
- *   Milestone 3: CallFrame frames[FRAMES_MAX] -- function call stack;
- *                Table globals                 -- global variable table;
- *                Obj* objects, Obj** grayStack -- GC bookkeeping (M4);
- *                ObjUpvalue* openUpvalues      -- closure capture chain.
+ * Call frames give each function its own `ip` and window (`slots`) into the
+ * shared value stack. Locals are frame-relative (`frame->slots[slot]`).
+ * `openUpvalues` threads heap upvalues that still point into the stack;
+ * OP_CLOSE_UPVALUE hoists them to the heap when their local goes out of
+ * scope.
  *
- * The value stack doubles as both the operand stack and local-variable
- * storage: locals live at fixed slots below the current frame's base.
+ * Globals (M2) stay a linear name/value list; M4 swaps in a hash table
+ * without changing bytecode. `objects` is the GC root list (M4).
  */
 typedef struct {
-  Chunk* chunk;
-  uint8_t* ip; /* instruction pointer */
+  ObjClosure* closure;
+  uint8_t* ip;
+  Value* slots;
+} CallFrame;
+
+typedef struct {
+  ObjString* name;
+  Value value;
+} Global;
+
+typedef struct {
+  CallFrame frames[FRAMES_MAX];
+  int frameCount;
 
   Value stack[STACK_MAX];
   Value* stackTop; /* points one past the topmost value */
 
-  /* Milestone 3+: call frames, globals table, open upvalues, object list. */
+  Obj* objects; /* intrusive list of all heap objects (see object.c) */
+
+  Global* globals; /* linear globals table (hash table in M4) */
+  int globalCount;
+  int globalCapacity;
+
+  ObjUpvalue* openUpvalues;
 } VM;
+
+extern VM vm;
 
 typedef enum {
   INTERPRET_OK,
@@ -40,6 +60,9 @@ void initVM(void);
 void freeVM(void);
 void push(Value value);
 Value pop(void);
-InterpretResult interpret(Chunk* chunk);
+/* Compiles and runs `source`; maps to EX_DATAERR (65) / EX_SOFTWARE paths. */
+InterpretResult interpret(const char* source);
+/* Runs an already-assembled chunk (demo / tests). Takes ownership. */
+InterpretResult interpretChunk(Chunk* chunk);
 
 #endif
